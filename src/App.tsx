@@ -1,321 +1,79 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import confetti from "canvas-confetti";
-import { Shuffle, Users, Sparkles, Copy, Play, RotateCcw, XCircle } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { useEffect, useState } from "react";
+import { AnimatePresence } from "framer-motion";
+import { ToastHost } from "@/components/ui/toast";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { LotteryHeader, CandidateInput, LotteryDisplay } from "@/components/lottery";
+import { useToast, useLottery } from "@/hooks";
+import { copyToClipboard } from "@/utils";
+import { UI_STYLES } from "@/constants";
 
-// 技术部知识分享摇号系统 - 纯前端实现（无后端依赖）
-// 修复：定义并内置 ToastHost 组件，移除外部 useToast 依赖，解决 "ToastHost 未定义" 报错。
-// 说明：如果你在真实项目中有 Toast Provider，可移除这里的轻量 toast，改用项目内的 Hook。
-
-// =============== 实用小函数 ===============
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// 解析候选人：按行、trim、过滤空白；可选去重（保留首次顺序）
-export function parseCandidates(text: string, dedupe: boolean): string[] {
-  const lines = text
-    .split(/\n+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!dedupe) return lines;
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const v of lines) {
-    if (!seen.has(v)) {
-      seen.add(v);
-      out.push(v);
-    }
-  }
-  return out;
-}
-
-// 从数组中随机抽取 n 个不重复元素（Fisher-Yates 洗牌）
-export function sampleUnique<T>(arr: T[], n: number): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a.slice(0, Math.max(0, Math.min(n, a.length)));
-}
-
-// 计算抽取人数上限
-export function clampPickCount(need: number, total: number): number {
-  const n = Number.isFinite(need) ? Math.floor(need) : 0;
-  return Math.max(0, Math.min(n, total));
-}
-
-// 彩带特效
-function burstConfetti(times = 3) {
-  const duration = 800;
-  const scalar = 1.2;
-  for (let i = 0; i < times; i++) {
-    setTimeout(() => {
-      confetti({
-        particleCount: 120,
-        spread: 70,
-        startVelocity: 35,
-        gravity: 0.9,
-        scalar,
-        origin: { x: Math.random() * 0.6 + 0.2, y: 0.2 },
-      });
-    }, i * duration);
-  }
-}
-
-// =============== 轻量 Toast 系统（无外部依赖） ===============
-interface ToastMsg { id: string; title?: string; description?: string }
-function uid() { return Math.random().toString(36).slice(2, 9); }
-
-// =============== 确认对话框组件 ===============
-interface ConfirmDialogProps {
-  open: boolean;
-  title: string;
-  description: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-function ConfirmDialog({ open, title, description, onConfirm, onCancel }: ConfirmDialogProps) {
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* 背景遮罩 */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onCancel}
-      />
-      
-      {/* 对话框 */}
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        transition={{ type: "spring", damping: 20 }}
-        className="relative mx-4 w-full max-w-md rounded-xl border border-slate-700/60 bg-slate-900/95 p-6 shadow-xl backdrop-blur-sm"
-      >
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
-          <p className="mt-2 text-sm text-slate-300">{description}</p>
-        </div>
-        
-        <div className="flex gap-3 justify-end">
-          <Button
-            variant="outline"
-            onClick={onCancel}
-            className="border-slate-600 hover:bg-slate-800"
-          >
-            取消
-          </Button>
-          <Button
-            onClick={onConfirm}
-            className="bg-red-600 hover:bg-red-700 focus-visible:ring-red-500/40"
-          >
-            确认重置
-          </Button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function ToastHost({ toasts, onClose }: { toasts: ToastMsg[]; onClose: (id: string) => void }) {
-  return (
-    <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 space-y-2">
-      <AnimatePresence>
-        {toasts.map((t) => (
-          <motion.div
-            key={t.id}
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 20, opacity: 0 }}
-            transition={{ type: "spring", damping: 18 }}
-            className="pointer-events-auto flex max-w-[92vw] items-start gap-3 rounded-xl border border-slate-700/60 bg-slate-900/90 p-3 text-slate-100 shadow-xl backdrop-blur sm:max-w-md"
-          >
-            <div className="min-w-0">
-              {t.title && <div className="text-sm font-semibold">{t.title}</div>}
-              {t.description && <div className="mt-0.5 text-sm text-slate-300">{t.description}</div>}
-            </div>
-            <button
-              onClick={() => onClose(t.id)}
-              className="ml-auto rounded-lg p-1 text-slate-400 hover:bg-white/5 hover:text-slate-200"
-              aria-label="关闭"
-            >
-              <XCircle className="h-5 w-5" />
-            </button>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// 技术部预设名单
-const TECH_DEPT_MEMBERS = `林俊才
-严燕萍
-刘团伟
-张朝臣
-陈建
-陈一臣
-张超杰
-欧石平
-南欣阳
-陈伟
-陈文宇
-秦杨杨
-陈河铮
-许贵华
-林子珉
-何佳靖
-程取红
-文伟强`;
-
+/**
+ * 技术部知识分享摇号系统 - 重构版本
+ */
 export default function TechShareLottery() {
-  // 内置 toast：提供 showToast 与 UI 容器
-  const [toasts, setToasts] = useState<ToastMsg[]>([]);
-  const showToast = ({ title, description }: { title?: string; description?: string }) => {
-    const id = uid();
-    setToasts((t) => [...t, { id, title, description }]);
-    // 2.8s 后自动关闭
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2800);
-  };
-
-  const [rawText, setRawText] = useState("");
-  const [need, setNeed] = useState(1);
-  const [dedupe, setDedupe] = useState(true);
-  const [rolling, setRolling] = useState(false);
-  const [result, setResult] = useState<string[]>([]);
-  const [history, setHistory] = useState<string[][]>([]);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-
-  const candidates = useMemo(() => parseCandidates(rawText, dedupe), [rawText, dedupe]);
-
-  const rollRef = useRef<HTMLDivElement | null>(null);
-  const [rollName, setRollName] = useState<string>("");
+  const { toasts, showToast, closeToast } = useToast();
+  
+  const {
+    rawText,
+    need,
+    dedupe,
+    rolling,
+    result,
+    history,
+    rollName,
+    candidates,
+    rollRef,
+    setRawText,
+    setNeed,
+    setDedupe,
+    startDraw,
+    resetLottery,
+  } = useLottery(showToast);
 
   useEffect(() => {
     document.title = "技术部知识分享摇号系统";
   }, []);
 
-  async function startDraw() {
-    if (rolling) return;
-    if (candidates.length === 0) {
-      showToast({ title: "名单为空", description: "请在左侧输入候选人，每行一个名字。" });
-      return;
-    }
-    if (need <= 0) {
-      showToast({ title: "人数不合法", description: "请输入大于 0 的抽取人数。" });
-      return;
-    }
-
-    const n = clampPickCount(need, candidates.length);
-    if (need > candidates.length) {
-      showToast({ title: "人数过多", description: `可用人数仅有 ${candidates.length}，将自动抽取 ${n} 人。` });
-    }
-
-    // 滚动动画阶段
-    setRolling(true);
-    setResult([]);
-
-    const rollDuration = 2200; // ms
-    const tick = 60; // ms
-    const startAt = Date.now();
-
-    while (Date.now() - startAt < rollDuration) {
-      const r = Math.floor(Math.random() * candidates.length);
-      setRollName(candidates[r]);
-      // 让滚动更有节奏：后半段逐渐减速
-      const progress = (Date.now() - startAt) / rollDuration;
-      const eased = tick + progress * 240; // 60 -> ~300ms
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(eased);
-    }
-
-    // 抽取结果
-    const winners = sampleUnique(candidates, n);
-    setResult(winners);
-    setHistory((prev) => [winners, ...prev].slice(0, 5));
-
-    burstConfetti(3);
-    setRolling(false);
-  }
-
-  function handleResetClick() {
+  const handleResetClick = () => {
     setShowResetConfirm(true);
-  }
+  };
 
-  function confirmReset() {
-    setRawText("");
-    setResult([]);
-    setHistory([]);
-    setNeed(1);
-    setRollName("");
+  const confirmReset = () => {
+    resetLottery();
     setShowResetConfirm(false);
     showToast({ title: "已重置", description: "所有数据已清除" });
-  }
+  };
 
-  function cancelReset() {
+  const cancelReset = () => {
     setShowResetConfirm(false);
-  }
+  };
 
-  function loadTechDeptPreset() {
-    setRawText(TECH_DEPT_MEMBERS);
+  const handleLoadTechDept = () => {
     showToast({ title: "已加载", description: "技术部名单已加载完成" });
-  }
+  };
 
-  function copyResult() {
+  const copyResult = () => {
     const text = result.join("\n");
-    const fallback = () => {
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        const ok = document.execCommand("copy");
-        document.body.removeChild(ta);
-        if (ok) showToast({ title: "已复制", description: text ? "结果已复制到剪贴板" : "没有可复制的结果" });
-        else showToast({ title: "复制失败", description: "请手动选择并复制。" });
-      } catch {
-        showToast({ title: "复制失败", description: "请手动选择并复制。" });
-      }
-    };
-
+    
+    copyToClipboard(
+      text,
+      () => showToast({ title: "已复制", description: "结果已复制到剪贴板" }),
+      () => {
     if (!text) {
       showToast({ title: "无内容", description: "没有可复制的结果" });
-      return;
-    }
-
-    if (navigator?.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(
-        () => showToast({ title: "已复制", description: "结果已复制到剪贴板" }),
-        fallback
-      );
     } else {
-      fallback();
+          showToast({ title: "复制失败", description: "请手动选择并复制。" });
     }
   }
-
-  const headerGradient = "bg-gradient-to-r from-fuchsia-500 via-purple-500 to-sky-400";
+    );
+  };
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-slate-950 text-slate-100">
       {/* Toast 容器 */}
-      <ToastHost toasts={toasts} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
-      
+      <ToastHost toasts={toasts} onClose={closeToast} />
+
       {/* 重置确认对话框 */}
       <AnimatePresence>
         {showResetConfirm && (
@@ -331,189 +89,38 @@ export default function TechShareLottery() {
 
       {/* 背景粒子 + 渐变光晕 */}
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className={`absolute -top-32 left-1/2 h-72 w-[1100px] -translate-x-1/2 blur-3xl opacity-35 ${headerGradient}`} />
+        <div className={`absolute -top-32 left-1/2 h-72 w-[1100px] -translate-x-1/2 blur-3xl opacity-35 ${UI_STYLES.HEADER_GRADIENT}`} />
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(56,189,248,0.06),rgba(15,23,42,0.2))]" />
       </div>
 
-      {/* 标题区域 */}
-      <header className="mx-auto max-w-6xl px-4 pb-6 pt-10 sm:pt-14">
-        <motion.h1
-          initial={{ opacity: 0, y: -12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ type: "spring", damping: 16 }}
-          className="text-center text-3xl font-extrabold tracking-tight sm:text-5xl"
-        >
-          <span className="relative inline-block">
-            <span className={`bg-clip-text text-transparent ${headerGradient}`}>技术部知识分享摇号系统</span>
-            <Sparkles className="absolute -right-8 -top-4 h-6 w-6 animate-pulse text-sky-300 sm:h-7 sm:w-7" />
-          </span>
-        </motion.h1>
-        <p className="mt-3 text-center text-sm text-slate-300 sm:text-base">
-          粘贴名单（每行一个），设置抽取人数，点击开始即可。全程在本地浏览器完成，无需后端。
-        </p>
-      </header>
+      {/* 页面头部 */}
+      <LotteryHeader />
 
       <main className="mx-auto grid max-w-6xl grid-cols-1 gap-4 px-4 pb-16 sm:grid-cols-2 sm:gap-6">
         {/* 左侧：输入区 */}
-        <Card className="border-slate-800 bg-slate-900/60 backdrop-blur">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-slate-100">
-              <Users className="h-5 w-5" /> 候选人名单
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="names" className="text-slate-200">每行输入一个名字</Label>
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={loadTechDeptPreset}
-                  className="h-7 px-3 text-xs border-slate-600 hover:bg-slate-800"
-                >
-                  <Users className="mr-1 h-3 w-3" />
-                  技术部
-                </Button>
-              </div>
-              <Textarea
-                id="names"
-                rows={12}
-                spellCheck={false}
-                value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-                placeholder={"例如：\n张三\n李四\n王五\n..."}
-                className="resize-y border-slate-700 bg-slate-950/60 text-slate-100 placeholder:text-slate-500 caret-sky-300 selection:bg-sky-400/30 focus-visible:ring-sky-500/40 focus-visible:border-sky-500/60"
-              />
-              <div className="flex items-center justify-between text-sm text-slate-400">
-                <span>当前有效人数：<b className="text-slate-200">{candidates.length}</b></span>
-                <label className="flex items-center gap-2">
-                  <span>自动去重</span>
-                  <Switch checked={dedupe} onCheckedChange={setDedupe} />
-                </label>
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-end">
-              <div className="flex-1 space-y-2">
-                <Label htmlFor="need" className="text-slate-200">需要抽取的人数</Label>
-                <Input
-                  id="need"
-                  type="number"
-                  min={1}
-                  value={need}
-                  onChange={(e) => setNeed(parseInt(e.target.value || "1", 10))}
-                  className="border-slate-700 bg-slate-950/50 text-slate-100 placeholder:text-slate-500 caret-sky-300 focus-visible:ring-sky-500/40 focus-visible:border-sky-500/60"
-                />
-              </div>
-
-              <div className="flex">
-                <Button onClick={startDraw} disabled={rolling} className="group h-10 w-full sm:w-auto">
-                  <Play className="mr-2 h-4 w-4 transition-transform group-active:scale-90" />
-                  {rolling ? "抽奖中…" : "开始抽奖"}
-                </Button>
-                <Button variant="secondary" onClick={handleResetClick} className="h-10 w-24">
-                  <RotateCcw className="mr-2 h-4 w-4" />重置
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <CandidateInput
+          rawText={rawText}
+          need={need}
+          dedupe={dedupe}
+          rolling={rolling}
+          candidatesCount={candidates.length}
+          onTextChange={setRawText}
+          onNeedChange={setNeed}
+          onDedupeChange={setDedupe}
+          onStartDraw={startDraw}
+          onReset={handleResetClick}
+          onLoadTechDept={handleLoadTechDept}
+        />
 
         {/* 右侧：动画+结果区 */}
-        <Card className="border-slate-800 bg-slate-900/60 backdrop-blur">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-slate-100">
-              <Shuffle className="h-5 w-5" /> 抽奖显示区
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {/* 滚动名字 */}
-            <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
-              <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/5" />
-              <div className="mb-3 text-xs uppercase tracking-wider text-slate-400">抽奖滚动</div>
-              <div
-                ref={rollRef}
-                className="h-14 overflow-hidden rounded-xl bg-slate-900/60 shadow-inner"
-              >
-                <AnimatePresence initial={false} mode="popLayout">
-                  <motion.div
-                    key={rolling ? `rolling-${rollName}` : `idle-${result.join(",")}`}
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: -20, opacity: 0 }}
-                    transition={{ duration: 0.18 }}
-                    className="flex h-14 items-center justify-center px-3 text-lg font-medium text-sky-200"
-                  >
-                    {rolling ? rollName || "—" : result.length ? "抽取完成！" : "等待开始…"}
-                  </motion.div>
-                </AnimatePresence>
-              </div>
-            </div>
-
-            {/* 结果展示 */}
-            <div className="mt-6">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-sm text-slate-400">最终抽中（{result.length} 人）</div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={copyResult} disabled={!result.length}>
-                    <Copy className="mr-2 h-4 w-4" /> 复制结果
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <AnimatePresence>
-                  {result.map((name, idx) => (
-                    <motion.div
-                      key={name}
-                      initial={{ y: 20, opacity: 0, scale: 0.98 }}
-                      animate={{ y: 0, opacity: 1, scale: 1 }}
-                      transition={{ type: "spring", damping: 18, delay: idx * 0.06 }}
-                      className="relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/60 p-4"
-                    >
-                      <div className="absolute inset-0 bg-gradient-to-tr from-sky-500/10 via-fuchsia-500/10 to-purple-400/10 opacity-40" />
-                      <div className="relative">
-                        <div className="text-sm text-slate-400">NO.{idx + 1}</div>
-                        <div className="mt-1 text-xl font-semibold tracking-wide text-slate-100">{name}</div>
-                      </div>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-              </div>
-
-              {!result.length && (
-                <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-slate-500">
-                  结果将显示在这里。
-                </div>
-              )}
-            </div>
-
-            {/* 历史记录 */}
-            <div className="mt-8">
-              <div className="mb-3 text-sm text-slate-400">最近纪录</div>
-              {history.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-800 p-4 text-center text-slate-500">
-                  暂无历史记录。
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {history.map((group, i) => (
-                    <div key={i} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-                      <div className="mb-1 text-xs text-slate-400">第 {i + 1} 次</div>
-                      <div className="flex flex-wrap gap-2">
-                        {group.map((g) => (
-                          <span key={g} className="rounded-lg bg-slate-900/70 px-2 py-1 text-sm text-slate-200">
-                            {g}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <LotteryDisplay
+          rolling={rolling}
+          rollName={rollName}
+          result={result}
+          history={history}
+          rollRef={rollRef}
+          onCopyResult={copyResult}
+        />
       </main>
 
       <footer className="mx-auto max-w-6xl px-4 pb-8 text-center text-xs text-slate-500">
@@ -524,6 +131,8 @@ export default function TechShareLottery() {
 }
 
 // =============== 简单单元测试（不会影响 UI，输出到控制台） ===============
+import { parseCandidates, sampleUnique, clampPickCount } from "@/utils";
+
 (function runTests() {
   try {
     console.group("🎯 Lottery Unit Tests");
